@@ -12,6 +12,8 @@ type EditorMessage =
       pos: number;
       name?: string;
       color?: string;
+      selStart?: number;
+      selEnd?: number;
     };
 
 export default function Editor() {
@@ -25,6 +27,8 @@ export default function Editor() {
         pos: number;
         name?: string;
         color?: string;
+        selStart?: number;
+        selEnd?: number;
       }
     >
   >({});
@@ -65,6 +69,8 @@ export default function Editor() {
               pos: msg.pos,
               name: (msg as any).name,
               color: (msg as any).color,
+              selStart: (msg as any).selStart,
+              selEnd: (msg as any).selEnd,
             },
           }));
         }
@@ -89,10 +95,18 @@ export default function Editor() {
     const el = textareaRef.current;
     if (!el) return;
     const pos = el.selectionStart ?? 0;
+    const selStart = el.selectionStart ?? pos;
+    const selEnd = el.selectionEnd ?? pos;
     socket.send(
       JSON.stringify({
         type: 'cursor',
-        payload: { pos, name: ident.name, color: ident.color },
+        payload: {
+          pos,
+          name: ident.name,
+          color: ident.color,
+          selStart,
+          selEnd,
+        },
       }),
     );
   }, [socket, ident]);
@@ -100,14 +114,70 @@ export default function Editor() {
   React.useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    const handler = () => sendCursor();
-    el.addEventListener('keyup', handler);
-    el.addEventListener('click', handler);
-    el.addEventListener('select', handler as any);
+
+    const scheduleSend = (() => {
+      let rafId: number | null = null;
+      return () => {
+        if (rafId !== null) return;
+        rafId = requestAnimationFrame(() => {
+          sendCursor();
+          rafId = null;
+        });
+      };
+    })();
+
+    let isMouseDown = false;
+    const onKeyUp = () => scheduleSend();
+    const onClick = () => scheduleSend();
+    const onSelect = () => scheduleSend();
+    const onMouseDown = () => {
+      isMouseDown = true;
+      scheduleSend();
+    };
+    const onMouseUp = () => {
+      isMouseDown = false;
+      scheduleSend();
+    };
+    const onMouseMove = () => {
+      if (isMouseDown) scheduleSend();
+    };
+    const onTouchStart = () => {
+      isMouseDown = true;
+      scheduleSend();
+    };
+    const onTouchEnd = () => {
+      isMouseDown = false;
+      scheduleSend();
+    };
+    const onTouchMove = () => {
+      if (isMouseDown) scheduleSend();
+    };
+    const onSelectionChange = () => {
+      if (document.activeElement === el) scheduleSend();
+    };
+
+    el.addEventListener('keyup', onKeyUp);
+    el.addEventListener('click', onClick);
+    el.addEventListener('select', onSelect as any);
+    el.addEventListener('mousedown', onMouseDown);
+    el.addEventListener('mouseup', onMouseUp);
+    el.addEventListener('mousemove', onMouseMove);
+    el.addEventListener('touchstart', onTouchStart, { passive: true } as any);
+    el.addEventListener('touchend', onTouchEnd, { passive: true } as any);
+    el.addEventListener('touchmove', onTouchMove, { passive: true } as any);
+    document.addEventListener('selectionchange', onSelectionChange);
+
     return () => {
-      el.removeEventListener('keyup', handler);
-      el.removeEventListener('click', handler);
-      el.removeEventListener('select', handler as any);
+      el.removeEventListener('keyup', onKeyUp);
+      el.removeEventListener('click', onClick);
+      el.removeEventListener('select', onSelect as any);
+      el.removeEventListener('mousedown', onMouseDown);
+      el.removeEventListener('mouseup', onMouseUp);
+      el.removeEventListener('mousemove', onMouseMove);
+      el.removeEventListener('touchstart', onTouchStart as any);
+      el.removeEventListener('touchend', onTouchEnd as any);
+      el.removeEventListener('touchmove', onTouchMove as any);
+      document.removeEventListener('selectionchange', onSelectionChange);
     };
   }, [sendCursor]);
 
@@ -185,6 +255,36 @@ export default function Editor() {
           aria-hidden
           style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
         >
+          {/* Peer selection highlights */}
+          {Object.entries(peerCursors).map(([id, c]) => {
+            const start = c.selStart ?? c.pos;
+            const end = c.selEnd ?? c.pos;
+            if (start === undefined || end === undefined || start === end)
+              return null;
+            const el = textareaRef.current;
+            if (!el) return null;
+            const rects = getTextareaSelectionClientRects(
+              el,
+              Math.min(start, end),
+              Math.max(start, end),
+              content,
+            );
+            return rects.map((r, idx) => (
+              <div
+                key={`${id}-${idx}`}
+                style={{
+                  position: 'absolute',
+                  left: r.left,
+                  top: r.top,
+                  width: r.width,
+                  height: r.height,
+                  background: 'rgba(32, 127, 255, 0.15)',
+                  borderLeft: `2px solid ${c.color || '#207fff'}`,
+                  borderRadius: 2,
+                }}
+              />
+            ));
+          })}
           {Object.entries(cursorPositions).map(([id, p]) => (
             <div
               key={id}
@@ -313,4 +413,83 @@ function getTextareaCaretCoordinates(
   const lineHeight = parseFloat(style.lineHeight || '16');
   document.body.removeChild(div);
   return { top, left, height: lineHeight };
+}
+
+// Compute selection rectangles by mirroring the textarea content
+function getTextareaSelectionClientRects(
+  textarea: HTMLTextAreaElement,
+  start: number,
+  end: number,
+  text: string,
+) {
+  if (start === end)
+    return [] as Array<{
+      top: number;
+      left: number;
+      width: number;
+      height: number;
+    }>;
+  const style = window.getComputedStyle(textarea);
+  const div = document.createElement('div');
+  div.style.position = 'absolute';
+  div.style.visibility = 'hidden';
+  div.style.whiteSpace = 'pre-wrap';
+  (div.style as any).wordWrap = 'break-word';
+  div.style.overflow = 'hidden';
+
+  const props = [
+    'direction',
+    'boxSizing',
+    'width',
+    'paddingTop',
+    'paddingRight',
+    'paddingBottom',
+    'paddingLeft',
+    'borderTopWidth',
+    'borderRightWidth',
+    'borderBottomWidth',
+    'borderLeftWidth',
+    'fontStyle',
+    'fontVariant',
+    'fontWeight',
+    'fontStretch',
+    'fontSize',
+    'lineHeight',
+    'fontFamily',
+    'textAlign',
+    'textTransform',
+    'textIndent',
+    'letterSpacing',
+    'tabSize',
+  ] as const;
+  for (const prop of props) {
+    (div.style as any)[prop] =
+      (style as any)[prop] ?? style.getPropertyValue(prop as any);
+  }
+
+  const taRect = textarea.getBoundingClientRect();
+  div.style.left = `${taRect.left + window.scrollX}px`;
+  div.style.top = `${taRect.top + window.scrollY}px`;
+  div.style.width = `${textarea.clientWidth}px`;
+
+  const before = document.createTextNode(text.slice(0, start));
+  const spanSel = document.createElement('span');
+  spanSel.textContent = text.slice(start, end) || ' ';
+  const after = document.createTextNode(text.slice(end) || '.');
+  div.appendChild(before);
+  div.appendChild(spanSel);
+  div.appendChild(after);
+
+  document.body.appendChild(div);
+  const rects = Array.from(spanSel.getClientRects());
+  const borderTop = parseFloat(style.borderTopWidth || '0');
+  const borderLeft = parseFloat(style.borderLeftWidth || '0');
+  const results = rects.map((r) => ({
+    top: r.top - taRect.top - textarea.scrollTop + borderTop,
+    left: r.left - taRect.left - textarea.scrollLeft + borderLeft,
+    width: r.width,
+    height: r.height,
+  }));
+  document.body.removeChild(div);
+  return results;
 }

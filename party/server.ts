@@ -300,6 +300,8 @@ export default class Server implements Party.Server {
         }
         if (data.type === 'cursor' && data.payload) {
           const pos = Number((data.payload as any).pos) || 0;
+          const selStart = (data.payload as any).selStart;
+          const selEnd = (data.payload as any).selEnd;
           const ident = this.identities.get(sender.id);
           const payload = {
             type: 'cursor',
@@ -307,6 +309,8 @@ export default class Server implements Party.Server {
             pos,
             name: ident?.name ?? (data.payload as any).name,
             color: ident?.color ?? (data.payload as any).color,
+            ...(typeof selStart === 'number' ? { selStart } : {}),
+            ...(typeof selEnd === 'number' ? { selEnd } : {}),
           } as const;
           this.room.broadcast(JSON.stringify(payload), [sender.id]);
           return;
