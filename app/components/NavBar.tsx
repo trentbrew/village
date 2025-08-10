@@ -64,8 +64,7 @@ export default function NavBar() {
   }, [presence]);
 
   return (
-    <nav className="navbar">
-      <div className="navbar-brand">🎈 PartyKit Examples</div>
+    <nav className="navbar fixed bottom-0 left-0 right-0 z-50">
       <ul className="navbar-links">
         {NAV_ITEMS.map((item) => {
           const isActive = current === item.href;

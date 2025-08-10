@@ -32,19 +32,14 @@ function App() {
   return (
     <div>
       <NavBar />
-      <main style={{ padding: '1rem' }}>
+      <main style={{ padding: '0' }}>
         {hash === '#/counter' && (
           <section>
-            <h2>Counter</h2>
-            <p>
-              <i>Multiplayer counter. Open multiple tabs to see updates.</i>
-            </p>
             <Counter />
           </section>
         )}
         {hash === '#/flow' && (
           <section>
-            <h2>Multiplayer React Flow</h2>
             <FlowCanvas />
           </section>
         )}

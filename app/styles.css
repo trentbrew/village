@@ -29,7 +29,7 @@ h6 {
 }
 
 #app {
-  padding: 1rem;
+  padding: 0;
 }
 
 .navbar {
@@ -61,4 +61,21 @@ h6 {
 }
 .nav-link.active {
   background: #f5f5f5;
+}
+
+.react-flow__attribution {
+  display: none;
+}
+
+/* Clear selection styling for local nodes */
+.react-flow__node.selected {
+  box-shadow: 0 0 0 2px #1677ff, 0 0 0 4px rgba(22, 119, 255, 0.2) !important;
+  border-radius: 8px;
+}
+
+/* Remote-selection outline colors per user (via data attributes) */
+.react-flow__node.remote-selected {
+  box-shadow: 0 0 0 2px var(--remote-outline, #999),
+    0 0 0 4px color-mix(in srgb, var(--remote-outline, #999) 20%, transparent) !important;
+  border-radius: 8px;
 }

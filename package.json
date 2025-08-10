@@ -7,6 +7,7 @@
     "deploy": "partykit deploy"
   },
   "dependencies": {
+    "@reactflow/node-resizer": "2.2.14",
     "@tailwindcss/vite": "^4.1.11",
     "daisyui": "^5.0.50",
     "partysocket": "^1.0.2",

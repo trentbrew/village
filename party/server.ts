@@ -2,6 +2,12 @@ import type * as Party from 'partykit/server';
 
 type FlowMessage =
   | { type: 'init'; nodes: unknown; edges: unknown }
+  | { type: 'select'; ids: string[]; from: string }
+  | {
+      type: 'marquee';
+      rect: { x: number; y: number; w: number; h: number } | null;
+      from: string;
+    }
   | { type: 'add-node'; node: unknown }
   | { type: 'update-node'; node: unknown }
   | { type: 'add-edge'; edge: unknown }
@@ -168,6 +174,27 @@ export default class Server implements Party.Server {
         } else if (msg.type === 'reset') {
           this.flowState = { nodes: [], edges: [] };
           this.room.broadcast(JSON.stringify({ type: 'reset' }));
+        } else if (msg.type === 'select') {
+          // mirror selection to other clients, enriched with user color/name
+          const ident = this.identities.get(sender.id);
+          const payload = {
+            type: 'select',
+            ids: (msg as any).ids || [],
+            from: sender.id,
+            ...(ident?.color ? { color: ident.color } : {}),
+            ...(ident?.name ? { name: ident.name } : {}),
+          } as const;
+          this.room.broadcast(JSON.stringify(payload), [sender.id]);
+        } else if (msg.type === 'marquee') {
+          const ident = this.identities.get(sender.id);
+          const payload = {
+            type: 'marquee',
+            rect: (msg as any).rect || null,
+            from: sender.id,
+            ...(ident?.color ? { color: ident.color } : {}),
+            ...(ident?.name ? { name: ident.name } : {}),
+          } as const;
+          this.room.broadcast(JSON.stringify(payload), [sender.id]);
         } else if (msg.type === 'cursor') {
           const { x, y } = msg as any;
           const ident = this.identities.get(sender.id);
