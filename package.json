@@ -7,10 +7,13 @@
     "deploy": "partykit deploy"
   },
   "dependencies": {
+    "@tailwindcss/vite": "^4.1.11",
+    "daisyui": "^5.0.50",
     "partysocket": "^1.0.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "reactflow": "^11.10.3"
+    "reactflow": "^11.10.3",
+    "tailwindcss": "^4.1.11"
   },
   "devDependencies": {
     "@types/react": "^18.3.4",

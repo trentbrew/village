@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import usePartySocket from 'partysocket/react';
 import { getIdentity, setIdentity } from '../identity';
+import { featureRoom, getRoomId } from '../rooms';
 
 type ChatMessage = {
   id: string;
@@ -22,12 +23,11 @@ export default function Chat() {
   const [name, setName] = useState<string>(base.name);
   const [color, setColor] = useState<string>(base.color);
   const [avatar, setAvatar] = useState<string | undefined>(base.avatar);
-  const [isTyping, setIsTyping] = useState(false);
-  const [typingUsers, setTypingUsers] = useState<Record<string, number>>({});
+  // typing indicator removed
   const scrollerRef = useRef<HTMLDivElement | null>(null);
 
   const socket = usePartySocket({
-    room: 'chat',
+    room: featureRoom('chat'),
     onMessage(evt) {
       try {
         const msg = JSON.parse(evt.data) as { type: string; payload?: unknown };
@@ -41,9 +41,6 @@ export default function Chat() {
             count: number;
           };
           setCount(count);
-        } else if (msg.type === 'typing') {
-          const { from } = msg.payload as any;
-          setTypingUsers((prev) => ({ ...prev, [from]: Date.now() }));
         }
       } catch (e) {
         // ignore
@@ -121,7 +118,7 @@ export default function Chat() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: 480 }}>
       <h2>
-        Chat ({count} {count === 1 ? 'user' : 'users'})
+        Chat — Room {getRoomId()} ({count} {count === 1 ? 'user' : 'users'})
       </h2>
       <div
         ref={scrollerRef}
@@ -240,12 +237,7 @@ export default function Chat() {
           );
         })}
       </div>
-      {/* typing indicator */}
-      {Object.keys(typingUsers).length > 0 && (
-        <div style={{ fontSize: 12, opacity: 0.6, marginTop: 4 }}>
-          someone is typing…
-        </div>
-      )}
+      {/* typing indicator removed */}
       <div
         style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}
       >
@@ -257,14 +249,7 @@ export default function Chat() {
             border: '1px solid #ccc',
           }}
           value={input}
-          onChange={(e) => {
-            setInput(e.target.value);
-            if (!isTyping) {
-              setIsTyping(true);
-              socket.send(JSON.stringify({ type: 'typing' }));
-              setTimeout(() => setIsTyping(false), 1000);
-            }
-          }}
+          onChange={(e) => setInput(e.target.value)}
           placeholder="Type a message"
           onKeyDown={(e) => {
             if (e.key === 'Enter') send();

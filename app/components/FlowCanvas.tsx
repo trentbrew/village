@@ -12,13 +12,17 @@ import {
   Controls,
   MiniMap,
   ReactFlow,
+  SelectionMode,
   addEdge,
   useEdgesState,
   useNodesState,
+  applyNodeChanges,
+  applyEdgeChanges,
 } from 'reactflow';
 import type { Connection, Edge, Node } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { getIdentity } from '../identity';
+import { featureRoom, getRoomId } from '../rooms';
 
 type FlowMessage =
   | { type: 'init'; nodes: Node[]; edges: Edge[] }
@@ -26,6 +30,7 @@ type FlowMessage =
   | { type: 'update-node'; node: Node }
   | { type: 'add-edge'; edge: Edge }
   | { type: 'reset' }
+  | { type: 'graph'; nodes: Node[]; edges: Edge[] }
   | {
       type: 'cursor';
       from?: string;
@@ -42,8 +47,10 @@ export default function FlowCanvas() {
   ]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
 
+  const panOnDrag = [1, 2];
+
   const socket = usePartySocket({
-    room: 'reactflow',
+    room: featureRoom('reactflow'),
     onMessage(evt) {
       try {
         const msg: FlowMessage = JSON.parse(evt.data);
@@ -61,6 +68,9 @@ export default function FlowCanvas() {
         } else if (msg.type === 'reset') {
           setNodes([]);
           setEdges([]);
+        } else if (msg.type === 'graph') {
+          setNodes(msg.nodes);
+          setEdges(msg.edges);
         } else if (msg.type === 'cursor' && msg.from) {
           setRemoteCursors((prev) => ({
             ...prev,
@@ -73,7 +83,10 @@ export default function FlowCanvas() {
           }));
         } else if (msg.type === 'cursor-leave') {
           setRemoteCursors((prev) => {
-            const { [msg.id]: _gone, ...rest } = prev;
+            // handle synthetic self-id by clearing all known cursors for this client id
+            const key = (msg as any).id;
+            if (key === 'self') return prev;
+            const { [key]: _gone, ...rest } = prev;
             return rest;
           });
         }
@@ -82,6 +95,18 @@ export default function FlowCanvas() {
       }
     },
   });
+
+  // ensure cursor is removed on unmount/refresh by sending a synthetic leave
+  useEffect(() => {
+    return () => {
+      // hint peers to drop our cursor
+      try {
+        socket.send(
+          JSON.stringify({ type: 'cursor-leave', id: 'self' } as any),
+        );
+      } catch {}
+    };
+  }, [socket]);
 
   const onConnect = useCallback((connection: Connection) => {
     const newEdge: Edge = {
@@ -120,6 +145,41 @@ export default function FlowCanvas() {
     );
   };
 
+  // Robust sync: broadcast full graph on editor changes
+  const handleNodesChange = useCallback(
+    (changes: Parameters<typeof applyNodeChanges>[0]) => {
+      setNodes((curr) => {
+        const next = applyNodeChanges(changes, curr);
+        socket.send(
+          JSON.stringify({
+            type: 'graph',
+            nodes: next,
+            edges,
+          } satisfies FlowMessage),
+        );
+        return next;
+      });
+    },
+    [edges, socket],
+  );
+
+  const handleEdgesChange = useCallback(
+    (changes: Parameters<typeof applyEdgeChanges>[0]) => {
+      setEdges((curr) => {
+        const next = applyEdgeChanges(changes, curr);
+        socket.send(
+          JSON.stringify({
+            type: 'graph',
+            nodes,
+            edges: next,
+          } satisfies FlowMessage),
+        );
+        return next;
+      });
+    },
+    [nodes, socket],
+  );
+
   // Cursor broadcasting
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const flowRef = useRef<any>(null);
@@ -134,11 +194,11 @@ export default function FlowCanvas() {
   useEffect(() => {
     const el = wrapperRef.current;
     if (!el) return;
-    const onMove = (e: MouseEvent) => {
+
+    const sendCursor = (clientX: number, clientY: number) => {
       const rect = el.getBoundingClientRect();
-      const px = e.clientX - rect.left;
-      const py = e.clientY - rect.top;
-      // project from screen to flow coordinates to account for pan/zoom
+      const px = clientX - rect.left;
+      const py = clientY - rect.top;
       const rf = flowRef.current as any;
       const { x, y } =
         rf && rf.project ? rf.project({ x: px, y: py }) : { x: px, y: py };
@@ -152,8 +212,40 @@ export default function FlowCanvas() {
         } satisfies FlowMessage),
       );
     };
-    el.addEventListener('mousemove', onMove);
-    return () => el.removeEventListener('mousemove', onMove);
+
+    const onWrapperPointerMove = (e: PointerEvent) => {
+      sendCursor(e.clientX, e.clientY);
+    };
+
+    const onGlobalPointerMove = (e: PointerEvent) => {
+      // keep broadcasting while dragging even if React Flow captures the pointer
+      sendCursor(e.clientX, e.clientY);
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      try {
+        // capture the pointer so we continue to get events during drags
+        (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+      } catch {}
+      window.addEventListener('pointermove', onGlobalPointerMove);
+    };
+
+    const endGlobalTracking = () => {
+      window.removeEventListener('pointermove', onGlobalPointerMove);
+    };
+
+    el.addEventListener('pointermove', onWrapperPointerMove);
+    el.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('pointerup', endGlobalTracking);
+    window.addEventListener('pointercancel', endGlobalTracking);
+
+    return () => {
+      el.removeEventListener('pointermove', onWrapperPointerMove);
+      el.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('pointermove', onGlobalPointerMove);
+      window.removeEventListener('pointerup', endGlobalTracking);
+      window.removeEventListener('pointercancel', endGlobalTracking);
+    };
   }, [socket, myColor, myName]);
 
   // Identify on open so server can enrich cursor messages
@@ -176,17 +268,20 @@ export default function FlowCanvas() {
   return (
     <div ref={wrapperRef} style={{ height: 500, position: 'relative' }}>
       <div style={{ marginBottom: 8 }}>
-        <button onClick={addNode}>Add node</button>
+        <button onClick={addNode}>Add node</button>{' '}
+        <span style={{ marginLeft: 8, opacity: 0.6 }}>Room {getRoomId()}</span>
       </div>
       <ReactFlow
         ref={flowRef}
         nodes={nodes}
         edges={edges}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
+        onNodesChange={handleNodesChange}
+        onEdgesChange={handleEdgesChange}
         onConnect={onConnect}
-        onNodeDrag={onNodeDrag}
-        onNodeDragStop={onNodeDragStop}
+        panOnScroll
+        selectionOnDrag
+        panOnDrag={panOnDrag}
+        selectionMode={SelectionMode.Partial}
         fitView
       >
         <MiniMap />

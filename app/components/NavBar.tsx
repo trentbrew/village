@@ -1,6 +1,7 @@
 import React from 'react';
 import usePartySocket from 'partysocket/react';
 import { getIdentity } from '../identity';
+import { featureRoom } from '../rooms';
 
 type NavItem = {
   label: string;
@@ -9,8 +10,10 @@ type NavItem = {
 
 const NAV_ITEMS: NavItem[] = [
   { label: 'Counter', href: '#/counter' },
-  { label: 'React Flow', href: '#/flow' },
+  { label: 'Canvas', href: '#/flow' },
   { label: 'Chat', href: '#/chat' },
+  { label: 'Editor', href: '#/editor' },
+  { label: 'Polls', href: '#/polls' },
   { label: 'Profile', href: '#/profile' },
 ];
 
@@ -31,7 +34,7 @@ export default function NavBar() {
     }>
   >([]);
   const presence = usePartySocket({
-    room: 'presence',
+    room: featureRoom('presence'),
     onOpen() {
       presence.send(
         JSON.stringify({
@@ -66,6 +69,7 @@ export default function NavBar() {
       <ul className="navbar-links">
         {NAV_ITEMS.map((item) => {
           const isActive = current === item.href;
+          const countOnPage = roster.filter((u) => u.page === item.href).length;
           return (
             <li key={item.href}>
               <a
@@ -74,6 +78,19 @@ export default function NavBar() {
               >
                 {item.label}
               </a>
+              {countOnPage > 0 && (
+                <span
+                  style={{
+                    marginLeft: 6,
+                    fontSize: 10,
+                    background: '#eee',
+                    padding: '2px 6px',
+                    borderRadius: 999,
+                  }}
+                >
+                  {countOnPage}
+                </span>
+              )}
             </li>
           );
         })}

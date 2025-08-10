@@ -6,6 +6,7 @@ type FlowMessage =
   | { type: 'update-node'; node: unknown }
   | { type: 'add-edge'; edge: unknown }
   | { type: 'reset' }
+  | { type: 'graph'; nodes: unknown[]; edges: unknown[] }
   | {
       type: 'cursor';
       x: number;
@@ -44,6 +45,16 @@ export default class Server implements Party.Server {
       page: string;
     }
   > = new Map();
+  // Editor state per room instance
+  editorContent: string = '';
+  editorVersion: number = 0;
+  // Polls state per room instance
+  polls: Array<{
+    id: string;
+    question: string;
+    options: string[];
+    votes: Record<number, number>;
+  }> = [];
 
   constructor(readonly room: Party.Room) {}
 
@@ -60,7 +71,10 @@ export default class Server implements Party.Server {
     // Room-based init
     if (this.room.id === 'example-room') {
       conn.send(this.count.toString());
-    } else if (this.room.id === 'reactflow') {
+    } else if (
+      this.room.id === 'reactflow' ||
+      this.room.id.startsWith('reactflow-')
+    ) {
       const msg: FlowMessage = {
         type: 'init',
         nodes: this.flowState.nodes,
@@ -76,7 +90,23 @@ export default class Server implements Party.Server {
       });
       conn.send(presence);
       this.room.broadcast(presence, [conn.id]);
-    } else if (this.room.id === 'presence') {
+    } else if (
+      this.room.id === 'editor' ||
+      this.room.id.startsWith('editor-')
+    ) {
+      conn.send(
+        JSON.stringify({
+          type: 'init',
+          content: this.editorContent,
+          version: this.editorVersion,
+        }),
+      );
+    } else if (this.room.id === 'polls' || this.room.id.startsWith('polls-')) {
+      conn.send(JSON.stringify({ type: 'init', polls: this.polls }));
+    } else if (
+      this.room.id === 'presence' ||
+      this.room.id.startsWith('presence-')
+    ) {
       // initialize with minimal entry; client will immediately identify
       this.presence.set(conn.id, {
         userId: conn.id,
@@ -117,6 +147,21 @@ export default class Server implements Party.Server {
             n.id === node.id ? node : n,
           );
           this.room.broadcast(JSON.stringify(msg), [sender.id]);
+        } else if (msg.type === 'graph') {
+          this.flowState.nodes = Array.isArray((msg as any).nodes)
+            ? (msg as any).nodes
+            : [];
+          this.flowState.edges = Array.isArray((msg as any).edges)
+            ? (msg as any).edges
+            : [];
+          this.room.broadcast(
+            JSON.stringify({
+              type: 'graph',
+              nodes: this.flowState.nodes,
+              edges: this.flowState.edges,
+            }),
+            [sender.id],
+          );
         } else if (msg.type === 'add-edge' && (msg as any).edge) {
           this.flowState.edges.push((msg as any).edge);
           this.room.broadcast(JSON.stringify(msg), [sender.id]);
@@ -216,7 +261,124 @@ export default class Server implements Party.Server {
       return;
     }
 
-    if (this.room.id === 'presence') {
+    if (this.room.id === 'editor' || this.room.id.startsWith('editor-')) {
+      try {
+        const data = JSON.parse(message) as { type: string; payload?: any };
+        if (data.type === 'identify' && data.payload) {
+          const { userId, name, color, avatar } = data.payload as {
+            userId: string;
+            name: string;
+            color: string;
+            avatar?: string;
+          };
+          this.identities.set(sender.id, {
+            userId,
+            name,
+            color,
+            ...(avatar ? { avatar } : {}),
+          } as any);
+          return;
+        }
+        if (data.type === 'edit' && data.payload) {
+          const { content, version } = data.payload as {
+            content: string;
+            version: number;
+          };
+          this.editorContent =
+            typeof content === 'string' ? content : this.editorContent;
+          this.editorVersion =
+            typeof version === 'number' ? version : this.editorVersion + 1;
+          this.room.broadcast(
+            JSON.stringify({
+              type: 'edit',
+              content: this.editorContent,
+              version: this.editorVersion,
+            }),
+            [sender.id],
+          );
+          return;
+        }
+        if (data.type === 'cursor' && data.payload) {
+          const pos = Number((data.payload as any).pos) || 0;
+          const ident = this.identities.get(sender.id);
+          const payload = {
+            type: 'cursor',
+            from: sender.id,
+            pos,
+            name: ident?.name ?? (data.payload as any).name,
+            color: ident?.color ?? (data.payload as any).color,
+          } as const;
+          this.room.broadcast(JSON.stringify(payload), [sender.id]);
+          return;
+        }
+      } catch {}
+      return;
+    }
+
+    if (this.room.id === 'polls' || this.room.id.startsWith('polls-')) {
+      try {
+        const data = JSON.parse(message) as { type: string; payload?: any };
+        if (data.type === 'identify' && data.payload) {
+          const { userId, name, color, avatar } = data.payload as {
+            userId: string;
+            name: string;
+            color: string;
+            avatar?: string;
+          };
+          this.identities.set(sender.id, {
+            userId,
+            name,
+            color,
+            ...(avatar ? { avatar } : {}),
+          } as any);
+          return;
+        }
+        if (data.type === 'create-poll' && data.payload) {
+          const { question, options } = data.payload as {
+            question: string;
+            options: string[];
+          };
+          if (
+            typeof question === 'string' &&
+            Array.isArray(options) &&
+            options.length >= 2
+          ) {
+            const id = Math.random().toString(36).slice(2, 10);
+            const votes: Record<number, number> = {};
+            for (let i = 0; i < options.length; i++) votes[i] = 0;
+            this.polls.push({ id, question, options, votes });
+            this.room.broadcast(
+              JSON.stringify({ type: 'polls', polls: this.polls }),
+              [],
+            );
+          }
+          return;
+        }
+        if (data.type === 'vote' && data.payload) {
+          const { pollId, option } = data.payload as {
+            pollId: string;
+            option: number;
+          };
+          const poll = this.polls.find((p) => p.id === pollId);
+          if (
+            poll &&
+            typeof option === 'number' &&
+            option >= 0 &&
+            option < poll.options.length
+          ) {
+            poll.votes[option] = (poll.votes[option] || 0) + 1;
+            this.room.broadcast(
+              JSON.stringify({ type: 'polls', polls: this.polls }),
+              [],
+            );
+          }
+          return;
+        }
+      } catch {}
+      return;
+    }
+
+    if (this.room.id === 'presence' || this.room.id.startsWith('presence-')) {
       try {
         const data = JSON.parse(message) as { type: string; payload?: any };
         if (data.type === 'identify') {
@@ -242,7 +404,7 @@ export default class Server implements Party.Server {
   }
 
   onClose(conn: Party.Connection) {
-    if (this.room.id === 'reactflow') {
+    if (this.room.id === 'reactflow' || this.room.id.startsWith('reactflow-')) {
       this.room.broadcast(
         JSON.stringify({
           type: 'cursor-leave',
@@ -264,7 +426,7 @@ export default class Server implements Party.Server {
       }
     }
 
-    if (this.room.id === 'presence') {
+    if (this.room.id === 'presence' || this.room.id.startsWith('presence-')) {
       this.presence.delete(conn.id);
       this.broadcastRoster();
     }
@@ -284,7 +446,8 @@ export default class Server implements Party.Server {
   }
 
   private broadcastRoster() {
-    if (this.room.id !== 'presence') return;
+    if (!(this.room.id === 'presence' || this.room.id.startsWith('presence-')))
+      return;
     const roster = Array.from(this.presence.values());
     this.room.broadcast(
       JSON.stringify({ type: 'roster', payload: roster }),
